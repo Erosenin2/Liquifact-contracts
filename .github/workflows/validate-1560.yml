@@ -3,69 +3,27 @@ on:
   push:
     branches: [validation/1560-horizon]
 jobs:
-  compare:
+  full-suite:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 30
     env:
       CARGO_BUILD_JOBS: 2
       CARGO_PROFILE_DEV_DEBUG: 0
       CARGO_PROFILE_TEST_DEBUG: 0
     steps:
       - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
       - uses: dtolnay/rust-toolchain@stable
         with:
-          components: rustfmt, clippy
-          targets: wasm32v1-none
+          components: rustfmt
       - uses: Swatinem/rust-cache@v2
-      - name: Install official Stellar CLI
-        run: |
-          mkdir -p "$RUNNER_TEMP/stellar"
-          curl -fsSL https://github.com/stellar/stellar-cli/releases/download/v28.1.0/stellar-cli-28.1.0-x86_64-unknown-linux-gnu.tar.gz | tar -xz -C "$RUNNER_TEMP/stellar"
-          echo "$RUNNER_TEMP/stellar" >> "$GITHUB_PATH"
-      - name: Compare full tests, lint and deploy size
+      - name: Complete compact full-suite output for PR
         run: |
           mkdir -p results
-          root="$PWD"
-          export CARGO_TARGET_DIR="$RUNNER_TEMP/target-1560"
-          git worktree add --detach "$RUNNER_TEMP/base-1560" 84813f0849137ee9e90e0bbd3e6540ae8ee463d1
-          cat >> "$RUNNER_TEMP/base-1560/escrow/src/tests/admin.rs" <<'RS'
-
-          #[test]
-          fn issue_1560_main_accepts_zero_horizon() {
-              let env = Env::default();
-              let (client, admin, sme) = setup(&env);
-              default_init(&client, &env, &admin, &sme);
-              assert_eq!(client.update_maturity_max_horizon(&0), 0);
-              assert_eq!(client.get_maturity_max_horizon(), 0);
-          }
-          RS
-          set +e
-          for mode in base head; do
-            if [ "$mode" = base ]; then cd "$RUNNER_TEMP/base-1560"; else cd "$root"; fi
-            cargo fmt --check > "$root/results/$mode-fmt.log" 2>&1
-            echo "$mode fmt=$?" >> "$root/results/status.txt"
-            if [ "$mode" = head ]; then
-              cargo fmt
-              git diff > "$root/results/format.patch"
-            fi
-            cargo test -p liquifact_escrow --lib > "$root/results/$mode-tests.log" 2>&1
-            echo "$mode tests=$?" >> "$root/results/status.txt"
-            cargo clippy --all-targets > "$root/results/$mode-clippy.log" 2>&1
-            echo "$mode clippy=$?" >> "$root/results/status.txt"
-            cargo build --target wasm32v1-none --release -p liquifact_escrow > "$root/results/$mode-build.log" 2>&1
-            echo "$mode build=$?" >> "$root/results/status.txt"
-            stellar contract optimize --wasm "$CARGO_TARGET_DIR/wasm32v1-none/release/liquifact_escrow.wasm" --wasm-out "$root/results/$mode-opt.wasm" > "$root/results/$mode-opt.log" 2>&1
-            echo "$mode optimize=$?" >> "$root/results/status.txt"
-            python3 scripts/strip_spec_docs.py "$root/results/$mode-opt.wasm" "$root/results/$mode-deploy.wasm" > "$root/results/$mode-size.log" 2>&1
-            echo "$mode strip=$?" >> "$root/results/status.txt"
-          done
-          rustc --version > "$root/results/tools.txt"
-          stellar --version >> "$root/results/tools.txt"
-          cat "$root/results/status.txt"
+          cargo fmt --check
+          set -o pipefail
+          cargo test -p liquifact_escrow --lib -- --format terse 2>&1 | tee results/full-tests-terse.log
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: validation-1560
+          name: validation-1560-terse
           path: results
