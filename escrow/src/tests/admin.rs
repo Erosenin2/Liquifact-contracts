@@ -3008,7 +3008,10 @@ fn test_lowered_horizon_existing_maturity_untouched_and_far_update_rejected() {
         client.try_update_maturity_max_horizon(&99_999u64),
         EscrowError::MaturityHorizonBelowMaturity,
     );
-    assert_eq!(client.get_maturity_max_horizon(), DEFAULT_MATURITY_MAX_HORIZON_SECS);
+    assert_eq!(
+        client.get_maturity_max_horizon(),
+        DEFAULT_MATURITY_MAX_HORIZON_SECS
+    );
     assert_eq!(client.get_escrow().maturity, 101_000u64);
     // Lowering exactly to the existing maturity remains valid.
     client.update_maturity_max_horizon(&100_000u64);

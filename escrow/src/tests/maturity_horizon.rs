@@ -1,14 +1,31 @@
 use super::*;
-use crate::{DEFAULT_MATURITY_MAX_HORIZON_SECS, MAX_MATURITY_MAX_HORIZON_SECS, MIN_MATURITY_MAX_HORIZON_SECS};
+use crate::{
+    DEFAULT_MATURITY_MAX_HORIZON_SECS, MAX_MATURITY_MAX_HORIZON_SECS, MIN_MATURITY_MAX_HORIZON_SECS,
+};
 
 fn init_horizon(env: &Env, horizon: u64, maturity: u64) -> LiquifactEscrowClient<'_> {
     let (client, admin, sme) = setup(env);
     env.ledger().set_timestamp(1_000);
     let token = install_stellar_asset_token(env);
     client.init(
-        &admin, &String::from_str(env, "HORIZON"), &sme, &TARGET, &800, &maturity,
-        &token.id, &None, &Address::generate(env), &None, &None, &None, &None,
-        &None, &Some(horizon), &None, &None, &None,
+        &admin,
+        &String::from_str(env, "HORIZON"),
+        &sme,
+        &TARGET,
+        &800,
+        &maturity,
+        &token.id,
+        &None,
+        &Address::generate(env),
+        &None,
+        &None,
+        &None,
+        &None,
+        &None,
+        &Some(horizon),
+        &None,
+        &None,
+        &None,
     );
     client
 }
@@ -17,29 +34,42 @@ fn init_horizon(env: &Env, horizon: u64, maturity: u64) -> LiquifactEscrowClient
 fn zero_horizon_is_rejected() {
     let env = Env::default();
     let client = init_horizon(&env, DEFAULT_MATURITY_MAX_HORIZON_SECS, 0);
-    assert_contract_error(client.try_update_maturity_max_horizon(&0), EscrowError::MaturityHorizonOutOfRange);
-    assert_eq!(client.get_maturity_max_horizon(), DEFAULT_MATURITY_MAX_HORIZON_SECS);
+    assert_contract_error(
+        client.try_update_maturity_max_horizon(&0),
+        EscrowError::MaturityHorizonOutOfRange,
+    );
+    assert_eq!(
+        client.get_maturity_max_horizon(),
+        DEFAULT_MATURITY_MAX_HORIZON_SECS
+    );
 }
 
 #[test]
 fn both_setters_enforce_inclusive_boundaries() {
     for raise in [false, true] {
-        for horizon in [MIN_MATURITY_MAX_HORIZON_SECS - 1, MIN_MATURITY_MAX_HORIZON_SECS,
-            MAX_MATURITY_MAX_HORIZON_SECS, MAX_MATURITY_MAX_HORIZON_SECS + 1, u64::MAX] {
+        for horizon in [
+            MIN_MATURITY_MAX_HORIZON_SECS - 1,
+            MIN_MATURITY_MAX_HORIZON_SECS,
+            MAX_MATURITY_MAX_HORIZON_SECS,
+            MAX_MATURITY_MAX_HORIZON_SECS + 1,
+            u64::MAX,
+        ] {
             let env = Env::default();
             // Init bounds intentionally remain unchanged; a legacy horizon of zero
             // lets the raise-only path exercise MIN without tripping HorizonNotRaised.
             let client = init_horizon(&env, 0, 0);
-            let before = env.events().all();
-            let result = if raise { client.try_raise_maturity_max_horizon(&horizon) }
-                else { client.try_update_maturity_max_horizon(&horizon) };
+            let result = if raise {
+                client.try_raise_maturity_max_horizon(&horizon)
+            } else {
+                client.try_update_maturity_max_horizon(&horizon)
+            };
             if (MIN_MATURITY_MAX_HORIZON_SECS..=MAX_MATURITY_MAX_HORIZON_SECS).contains(&horizon) {
                 assert_eq!(result, Ok(Ok(horizon)));
                 assert_eq!(client.get_maturity_max_horizon(), horizon);
             } else {
                 assert_contract_error(result, EscrowError::MaturityHorizonOutOfRange);
+                assert!(env.events().all().is_empty());
                 assert_eq!(client.get_maturity_max_horizon(), 0);
-                assert_eq!(env.events().all(), before);
             }
         }
     }
@@ -53,11 +83,16 @@ fn lowering_to_remaining_maturity_is_allowed_but_below_it_is_atomic() {
     // Use the current ledger, not the timestamp at initialization.
     env.ledger().set_timestamp(2_000);
     let remaining = maturity - 2_000;
-    let before = env.events().all();
-    assert_contract_error(client.try_update_maturity_max_horizon(&(remaining - 1)), EscrowError::MaturityHorizonBelowMaturity);
-    assert_eq!(client.get_maturity_max_horizon(), DEFAULT_MATURITY_MAX_HORIZON_SECS);
+    assert_contract_error(
+        client.try_update_maturity_max_horizon(&(remaining - 1)),
+        EscrowError::MaturityHorizonBelowMaturity,
+    );
+    assert!(env.events().all().is_empty());
+    assert_eq!(
+        client.get_maturity_max_horizon(),
+        DEFAULT_MATURITY_MAX_HORIZON_SECS
+    );
     assert_eq!(client.get_escrow().maturity, maturity);
-    assert_eq!(env.events().all(), before);
     assert_eq!(client.update_maturity_max_horizon(&remaining), remaining);
     assert_eq!(client.get_escrow().maturity, maturity);
 }
@@ -66,13 +101,25 @@ fn lowering_to_remaining_maturity_is_allowed_but_below_it_is_atomic() {
 fn unchanged_update_and_non_increasing_raise_are_rejected() {
     let env = Env::default();
     let client = init_horizon(&env, DEFAULT_MATURITY_MAX_HORIZON_SECS, 0);
-    let before = env.events().all();
-    assert_contract_error(client.try_update_maturity_max_horizon(&DEFAULT_MATURITY_MAX_HORIZON_SECS), EscrowError::MaturityHorizonUnchanged);
-    for horizon in [DEFAULT_MATURITY_MAX_HORIZON_SECS, MIN_MATURITY_MAX_HORIZON_SECS] {
-        assert_contract_error(client.try_raise_maturity_max_horizon(&horizon), EscrowError::HorizonNotRaised);
+    assert_contract_error(
+        client.try_update_maturity_max_horizon(&DEFAULT_MATURITY_MAX_HORIZON_SECS),
+        EscrowError::MaturityHorizonUnchanged,
+    );
+    assert!(env.events().all().is_empty());
+    for horizon in [
+        DEFAULT_MATURITY_MAX_HORIZON_SECS,
+        MIN_MATURITY_MAX_HORIZON_SECS,
+    ] {
+        assert_contract_error(
+            client.try_raise_maturity_max_horizon(&horizon),
+            EscrowError::HorizonNotRaised,
+        );
+        assert!(env.events().all().is_empty());
     }
-    assert_eq!(env.events().all(), before);
-    assert_eq!(client.get_maturity_max_horizon(), DEFAULT_MATURITY_MAX_HORIZON_SECS);
+    assert_eq!(
+        client.get_maturity_max_horizon(),
+        DEFAULT_MATURITY_MAX_HORIZON_SECS
+    );
 }
 
 #[test]
@@ -86,19 +133,32 @@ fn both_setters_reject_every_non_open_status() {
             client
         } else {
             let (client, _, _) = init_and_fund_with_real_token(&env, TARGET, "HORIZON_STATUS");
-            if status == 2 { client.settle(); }
-            if status == 3 { client.withdraw(); }
+            if status == 2 {
+                client.settle();
+            }
+            if status == 3 {
+                client.withdraw();
+            }
             client
         };
         let before = client.get_escrow();
         assert_eq!(before.status, status);
-        let events = env.events().all();
         let horizon = DEFAULT_MATURITY_MAX_HORIZON_SECS + 1;
-        assert_contract_error(client.try_update_maturity_max_horizon(&horizon), EscrowError::MaturityHorizonUpdateNotOpen);
-        assert_contract_error(client.try_raise_maturity_max_horizon(&horizon), EscrowError::MaturityHorizonUpdateNotOpen);
+        assert_contract_error(
+            client.try_update_maturity_max_horizon(&horizon),
+            EscrowError::MaturityHorizonUpdateNotOpen,
+        );
+        assert!(env.events().all().is_empty());
+        assert_contract_error(
+            client.try_raise_maturity_max_horizon(&horizon),
+            EscrowError::MaturityHorizonUpdateNotOpen,
+        );
+        assert!(env.events().all().is_empty());
         assert_eq!(client.get_escrow(), before);
-        assert_eq!(client.get_maturity_max_horizon(), DEFAULT_MATURITY_MAX_HORIZON_SECS);
-        assert_eq!(env.events().all(), events);
+        assert_eq!(
+            client.get_maturity_max_horizon(),
+            DEFAULT_MATURITY_MAX_HORIZON_SECS
+        );
     }
 }
 
@@ -134,9 +194,15 @@ fn both_setters_require_admin_authorization() {
         let env = Env::default();
         let client = init_horizon(&env, DEFAULT_MATURITY_MAX_HORIZON_SECS, 0);
         env.mock_auths(&[]);
-        let result = if raise { client.try_raise_maturity_max_horizon(&MAX_MATURITY_MAX_HORIZON_SECS) }
-            else { client.try_update_maturity_max_horizon(&MAX_MATURITY_MAX_HORIZON_SECS) };
+        let result = if raise {
+            client.try_raise_maturity_max_horizon(&MAX_MATURITY_MAX_HORIZON_SECS)
+        } else {
+            client.try_update_maturity_max_horizon(&MAX_MATURITY_MAX_HORIZON_SECS)
+        };
         assert!(result.is_err());
-        assert_eq!(client.get_maturity_max_horizon(), DEFAULT_MATURITY_MAX_HORIZON_SECS);
+        assert_eq!(
+            client.get_maturity_max_horizon(),
+            DEFAULT_MATURITY_MAX_HORIZON_SECS
+        );
     }
 }

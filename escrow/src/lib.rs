@@ -1013,7 +1013,11 @@ pub(crate) fn validate_maturity_bounds(env: &Env, maturity: u64, max_horizon: u6
 }
 
 fn validate_maturity_horizon_update(env: &Env, escrow: &InvoiceEscrow, new_horizon: u64) {
-    ensure(env, escrow.status == 0, EscrowError::MaturityHorizonUpdateNotOpen);
+    ensure(
+        env,
+        escrow.status == 0,
+        EscrowError::MaturityHorizonUpdateNotOpen,
+    );
     ensure(
         env,
         (MIN_MATURITY_MAX_HORIZON_SECS..=MAX_MATURITY_MAX_HORIZON_SECS).contains(&new_horizon),
