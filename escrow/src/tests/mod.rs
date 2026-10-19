@@ -72,6 +72,7 @@ mod init;
 // mod integration;
 mod integration_status_guards;
 mod legal_hold;
+mod maturity_horizon;
 mod migration_errors;
 mod paginated_views;
 mod pause;
