@@ -791,6 +791,9 @@ pub enum EscrowError {
 
     /// [`LiquifactEscrow::recover_admin`] called before the admin-recovery timelock deadline.
     AdminRecoveryNotExpired = 249,
+
+    /// A refund batch contains the same investor more than once.
+    RefundBatchDuplicateInvestor = 250,
 }
 
 #[inline(always)]
@@ -2044,6 +2047,17 @@ pub struct InvestorRefundedEvt {
     #[topic]
     pub invoice_id: Symbol,
     pub amount: i128,
+}
+
+/// Aggregate result of a permissionless refund batch.
+#[contractevent]
+pub struct RefundBatchProcessed {
+    #[topic]
+    pub name: Symbol,
+    #[topic]
+    pub invoice_id: Symbol,
+    pub count: u32,
+    pub total: i128,
 }
 
 /// Emitted after a successful [`LiquifactEscrow::unfund`] call.
@@ -7312,24 +7326,29 @@ impl LiquifactEscrow {
     /// refundable contribution, initialized token data is missing, or the refund transfer fails
     /// token-balance invariants.
     pub fn refund(env: Env, investor: Address) {
-        Self::refund_impl(&env, investor, false);
+        investor.require_auth();
+        Self::refund_core(&env, investor, false);
     }
 
-    /// Core refund logic shared by [`LiquifactEscrow::refund`] and [`LiquifactEscrow::refund_batch`].
-    ///
-    /// When `skip_zero_contribution` is `true`, investors with no recorded contribution are
-    /// skipped silently (batch mode). Otherwise a zero contribution fails with
-    /// [`EscrowError::NoContributionToRefund`].
-    fn refund_impl(env: &Env, investor: Address, skip_zero_contribution: bool) {
-        investor.require_auth();
+    /// Transfer principal only to its investor; batch mode skips ineligible entries.
+    fn refund_core(env: &Env, investor: Address, skip_ineligible: bool) -> i128 {
+        if skip_ineligible
+            && env
+                .storage()
+                .instance()
+                .get(&DataKey::InvestorRefunded(investor.clone()))
+                .unwrap_or(false)
+        {
+            return 0;
+        }
 
         let escrow = Self::get_escrow(env.clone());
         guard_status_eq(env, escrow.status, 4, EscrowError::RefundNotCancelled);
 
         let amount: i128 = Self::get_persistent_investor_contribution(env, investor.clone());
         if amount <= 0 {
-            if skip_zero_contribution {
-                return;
+            if skip_ineligible {
+                return 0;
             }
             fail(env, EscrowError::NoContributionToRefund);
         }
@@ -7369,35 +7388,21 @@ impl LiquifactEscrow {
             amount,
         }
         .publish(env);
+        amount
     }
 
-    /// Batch refund entrypoint: refund multiple investors in a single call.
+    /// Permissionlessly return cancelled principal to each investor's own address.
     ///
-    /// Each address is processed sequentially with per-investor [`Address::require_auth()`].
-    /// All existing [`LiquifactEscrow::refund`] invariants (cancelled-status gate, non-zero
-    /// contribution, checks-effects-interactions, liability-floor accounting) are enforced
-    /// per entry.
+    /// Returns `(refunded_count, total_refunded)`. Zero-contribution and previously
+    /// refunded entries are skipped. Single [`Self::refund`] still requires investor auth.
     ///
-    /// Already-refunded entries (where [`DataKey::InvestorRefunded`] is already `true`) are
-    /// **skipped** without failing the batch — this makes the entrypoint idempotent and
-    /// allows relayer-style retry without needing to prune the list.
+    /// Empty/oversize batches retain their existing errors. Duplicate addresses fail
+    /// with [`EscrowError::RefundBatchDuplicateInvestor`] before any transfers. Other
+    /// refund or token errors revert the entire batch. Work is bounded by [`MAX_REFUND_BATCH`].
     ///
-    /// # Parameters
-    /// - `investors`: `Vec<Address>` of investor addresses to refund.
-    ///
-    /// # Errors
-    /// - [`EscrowError::RefundBatchEmpty`] if `investors` is empty
-    /// - [`EscrowError::RefundBatchTooLarge`] if `investors.len() > [`MAX_REFUND_BATCH`]
-    ///
-    /// Per-entry errors (non-cancelled status, zero contribution, auth failure) are **not**
-    /// silently skipped — they terminate the entire batch. Only already-refunded entries
-    /// (where [`DataKey::InvestorRefunded`] is `true`) are safely skipped.
-    ///
-    /// # Events
-    /// One [`InvestorRefundedEvt`] per newly-refunded investor.
-    pub fn refund_batch(env: Env, investors: Vec<Address>) {
+    /// Emits [`InvestorRefundedEvt`] for each refund and [`RefundBatchProcessed`] once.
+    pub fn refund_batch(env: Env, investors: Vec<Address>) -> (u32, i128) {
         let n = investors.len();
-
         ensure(&env, n > 0, EscrowError::RefundBatchEmpty);
         ensure(
             &env,
@@ -7405,22 +7410,35 @@ impl LiquifactEscrow {
             EscrowError::RefundBatchTooLarge,
         );
 
+        // Validate the entire bounded list before moving any funds, including skipped entries.
         for i in 0..n {
-            let investor = investors.get(i).unwrap();
-
-            // Skip already-refunded entries without failing.
-            if env
-                .storage()
-                .instance()
-                .get(&DataKey::InvestorRefunded(investor.clone()))
-                .unwrap_or(false)
-            {
-                continue;
+            for j in 0..i {
+                ensure(
+                    &env,
+                    investors.get(i).unwrap() != investors.get(j).unwrap(),
+                    EscrowError::RefundBatchDuplicateInvestor,
+                );
             }
-
-            // Apply identical per-investor gates as single refund().
-            Self::refund(env.clone(), investor);
         }
+
+        let mut count = 0u32;
+        let mut total = 0i128;
+        for investor in investors.iter() {
+            let amount = Self::refund_core(&env, investor, true);
+            if amount > 0 {
+                count += 1;
+                // Unique refunded contributions sum to at most the recorded funded amount.
+                total += amount;
+            }
+        }
+        RefundBatchProcessed {
+            name: symbol_short!("refund_bt"),
+            invoice_id: Self::get_escrow(env.clone()).invoice_id,
+            count,
+            total,
+        }
+        .publish(&env);
+        (count, total)
     }
 
     /// Allow an investor to partially or fully withdraw their principal while the escrow
