@@ -791,6 +791,10 @@ pub enum EscrowError {
 
     /// [`LiquifactEscrow::recover_admin`] called before the admin-recovery timelock deadline.
     AdminRecoveryNotExpired = 249,
+    /// The supplied address is not the designated attestor.
+    NotAttestor = 254,
+    /// The digest already exists as the primary attestation or in the append log.
+    AttestationDigestDuplicate = 255,
 }
 
 #[inline(always)]
@@ -1185,6 +1189,10 @@ pub enum DataKey {
     /// Stored cross-contract callback context ([`CallbackContext`]) keyed by invocation nonce.
     /// Binds expected origin address, invocation nonce, and lifecycle phase.
     CallbackContext(u64),
+    /// Optional designated attestor, stored in instance storage.
+    Attestor,
+    /// Append author, stored persistently by log index.
+    AttestationAuthor(u32),
 }
 
 // --- Data types ---
@@ -2100,6 +2108,25 @@ pub struct PrimaryAttestationBound {
     pub name: Symbol,
     pub invoice_id: Symbol,
     pub digest: BytesN<32>,
+}
+
+/// Emitted when the admin assigns, rotates, or clears the append-only attestor role.
+#[contractevent]
+pub struct AttestorChanged {
+    #[topic]
+    pub name: Symbol,
+    pub invoice_id: Symbol,
+    pub attestor: Option<Address>,
+}
+
+/// Attribution accompanying the unchanged `AttestationDigestAppended` event.
+#[contractevent]
+pub struct AttestationAuthored {
+    #[topic]
+    pub name: Symbol,
+    pub invoice_id: Symbol,
+    pub index: u32,
+    pub author: Address,
 }
 
 #[contractevent]
@@ -3513,33 +3540,96 @@ impl LiquifactEscrow {
             .get(&DataKey::PrimaryAttestationHash)
     }
 
-    /// Append a digest to a bounded on-chain log (see [`MAX_ATTESTATION_APPEND_ENTRIES`]) for **versioned**
-    /// or incremental attestation updates. Does not replace [`LiquifactEscrow::bind_primary_attestation_hash`].
-    ///
-    /// # Errors
-    /// Emits typed [`EscrowError`] codes when the escrow is uninitialized or the append log is full.
+    /// Assign, rotate, or clear the append-only attestor role. Requires admin authorization.
+    /// Clearing the role does not remove historical authors or disable admin appends.
+    pub fn set_attestor(env: Env, attestor: Option<Address>) {
+        let escrow = Self::load_escrow_require_admin(&env);
+        if let Some(address) = &attestor {
+            env.storage().instance().set(&DataKey::Attestor, address);
+        } else {
+            env.storage().instance().remove(&DataKey::Attestor);
+        }
+        AttestorChanged {
+            name: symbol_short!("att_role"),
+            invoice_id: escrow.invoice_id,
+            attestor,
+        }
+        .publish(&env);
+    }
+
+    /// Append as admin. Rejects primary and historical duplicates, including revoked digests.
+    /// The log remains bounded by [`MAX_ATTESTATION_APPEND_ENTRIES`].
     pub fn append_attestation_digest(env: Env, digest: BytesN<32>) {
         let escrow = Self::load_escrow_require_admin(&env);
+        let author = escrow.admin.clone();
+        Self::append_attestation(&env, &escrow, author, digest);
+    }
 
-        let mut log: Vec<BytesN<32>> = Self::load_attestation_log(&env);
+    /// Append as the designated attestor. This role grants no revocation or admin permissions.
+    pub fn append_attestation_digest_as(env: Env, attestor: Address, digest: BytesN<32>) {
+        let escrow = Self::get_escrow(env.clone());
+        let designated: Option<Address> = env.storage().instance().get(&DataKey::Attestor);
         ensure(
             &env,
+            designated == Some(attestor.clone()),
+            EscrowError::NotAttestor,
+        );
+        attestor.require_auth();
+        Self::append_attestation(&env, &escrow, attestor, digest);
+    }
+
+    fn append_attestation(env: &Env, escrow: &InvoiceEscrow, author: Address, digest: BytesN<32>) {
+        let mut log = Self::load_attestation_log(env);
+        let primary: Option<BytesN<32>> = env
+            .storage()
+            .instance()
+            .get(&DataKey::PrimaryAttestationHash);
+        ensure(
+            env,
+            primary != Some(digest.clone()) && !log.contains(&digest),
+            EscrowError::AttestationDigestDuplicate,
+        );
+        ensure(
+            env,
             log.len() < MAX_ATTESTATION_APPEND_ENTRIES,
             EscrowError::AttestationAppendLogCapacityReached,
         );
-        let idx = log.len();
+        let index = log.len();
         log.push_back(digest.clone());
         env.storage()
             .instance()
             .set(&DataKey::AttestationAppendLog, &log);
-
+        let author_key = DataKey::AttestationAuthor(index);
+        env.storage().persistent().set(&author_key, &author);
+        env.storage().persistent().extend_ttl(
+            &author_key,
+            PERSISTENT_TTL_MIN_EXTENSION_LEDGERS,
+            PERSISTENT_TTL_MIN_EXTENSION_LEDGERS,
+        );
+        AttestationAuthored {
+            name: symbol_short!("att_by"),
+            invoice_id: escrow.invoice_id.clone(),
+            index,
+            author,
+        }
+        .publish(env);
         AttestationDigestAppended {
             name: symbol_short!("att_app"),
             invoice_id: escrow.invoice_id.clone(),
-            index: idx,
+            index,
             digest,
         }
-        .publish(&env);
+        .publish(env);
+    }
+
+    /// Returns the recorded author, or `None` for legacy entries and out-of-range indices.
+    pub fn get_attestation_author(env: Env, index: u32) -> Option<Address> {
+        if index >= Self::load_attestation_log(&env).len() {
+            return None;
+        }
+        env.storage()
+            .persistent()
+            .get(&DataKey::AttestationAuthor(index))
     }
 
     pub fn get_attestation_append_log(env: Env) -> Vec<BytesN<32>> {
