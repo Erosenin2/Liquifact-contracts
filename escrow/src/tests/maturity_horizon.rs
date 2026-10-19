@@ -68,7 +68,7 @@ fn both_setters_enforce_inclusive_boundaries() {
                 assert_eq!(client.get_maturity_max_horizon(), horizon);
             } else {
                 assert_contract_error(result, EscrowError::MaturityHorizonOutOfRange);
-                assert!(env.events().all().is_empty());
+                assert!(env.events().all().events().is_empty());
                 assert_eq!(client.get_maturity_max_horizon(), 0);
             }
         }
@@ -87,7 +87,7 @@ fn lowering_to_remaining_maturity_is_allowed_but_below_it_is_atomic() {
         client.try_update_maturity_max_horizon(&(remaining - 1)),
         EscrowError::MaturityHorizonBelowMaturity,
     );
-    assert!(env.events().all().is_empty());
+    assert!(env.events().all().events().is_empty());
     assert_eq!(
         client.get_maturity_max_horizon(),
         DEFAULT_MATURITY_MAX_HORIZON_SECS
@@ -105,7 +105,7 @@ fn unchanged_update_and_non_increasing_raise_are_rejected() {
         client.try_update_maturity_max_horizon(&DEFAULT_MATURITY_MAX_HORIZON_SECS),
         EscrowError::MaturityHorizonUnchanged,
     );
-    assert!(env.events().all().is_empty());
+    assert!(env.events().all().events().is_empty());
     for horizon in [
         DEFAULT_MATURITY_MAX_HORIZON_SECS,
         MIN_MATURITY_MAX_HORIZON_SECS,
@@ -114,7 +114,7 @@ fn unchanged_update_and_non_increasing_raise_are_rejected() {
             client.try_raise_maturity_max_horizon(&horizon),
             EscrowError::HorizonNotRaised,
         );
-        assert!(env.events().all().is_empty());
+        assert!(env.events().all().events().is_empty());
     }
     assert_eq!(
         client.get_maturity_max_horizon(),
@@ -148,12 +148,12 @@ fn both_setters_reject_every_non_open_status() {
             client.try_update_maturity_max_horizon(&horizon),
             EscrowError::MaturityHorizonUpdateNotOpen,
         );
-        assert!(env.events().all().is_empty());
+        assert!(env.events().all().events().is_empty());
         assert_contract_error(
             client.try_raise_maturity_max_horizon(&horizon),
             EscrowError::MaturityHorizonUpdateNotOpen,
         );
-        assert!(env.events().all().is_empty());
+        assert!(env.events().all().events().is_empty());
         assert_eq!(client.get_escrow(), before);
         assert_eq!(
             client.get_maturity_max_horizon(),
