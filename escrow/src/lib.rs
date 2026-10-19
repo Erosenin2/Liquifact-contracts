@@ -205,6 +205,11 @@ pub const MAX_BUMP_TTL_BATCH: u32 = 32;
 /// Default maximum maturity horizon in seconds (~5 years) when no explicit horizon is configured.
 pub const DEFAULT_MATURITY_MAX_HORIZON_SECS: u64 = 157_680_000; // ~5 years (365.25 * 24 * 3600 * 5)
 
+/// Minimum configurable maturity horizon (one day).
+pub const MIN_MATURITY_MAX_HORIZON_SECS: u64 = 86_400;
+/// Maximum configurable maturity horizon (ten years).
+pub const MAX_MATURITY_MAX_HORIZON_SECS: u64 = 315_360_000;
+
 // ---------------------------------------------------------------------------
 // Bounded fee schedule
 // ---------------------------------------------------------------------------
@@ -791,6 +796,14 @@ pub enum EscrowError {
 
     /// [`LiquifactEscrow::recover_admin`] called before the admin-recovery timelock deadline.
     AdminRecoveryNotExpired = 249,
+    /// A maturity horizon update is outside the inclusive one-day to ten-year range.
+    MaturityHorizonOutOfRange = 250,
+    /// Maturity horizon updates require an open escrow.
+    MaturityHorizonUpdateNotOpen = 251,
+    /// The requested maturity horizon equals the current value.
+    MaturityHorizonUnchanged = 252,
+    /// The requested horizon would exclude the configured maturity.
+    MaturityHorizonBelowMaturity = 253,
 }
 
 #[inline(always)]
@@ -996,6 +1009,24 @@ pub(crate) fn validate_maturity_bounds(env: &Env, maturity: u64, max_horizon: u6
         env,
         maturity <= max_allowed,
         EscrowError::MaturityExceedsMaxHorizon,
+    );
+}
+
+fn validate_maturity_horizon_update(env: &Env, escrow: &InvoiceEscrow, new_horizon: u64) {
+    ensure(
+        env,
+        escrow.status == 0,
+        EscrowError::MaturityHorizonUpdateNotOpen,
+    );
+    ensure(
+        env,
+        (MIN_MATURITY_MAX_HORIZON_SECS..=MAX_MATURITY_MAX_HORIZON_SECS).contains(&new_horizon),
+        EscrowError::MaturityHorizonOutOfRange,
+    );
+    ensure(
+        env,
+        escrow.maturity <= env.ledger().timestamp().saturating_add(new_horizon),
+        EscrowError::MaturityHorizonBelowMaturity,
     );
 }
 
@@ -6690,12 +6721,6 @@ impl LiquifactEscrow {
         new_deadline
     }
 
-    /// Update the configured maximum maturity horizon for this escrow instance.
-    ///
-    /// Only the current admin may call this. The new horizon applies to subsequent
-    /// [`LiquifactEscrow::update_maturity`] calls; existing maturity values are unaffected.
-    ///
-    /// Emits [`MaturityMaxHorizonUpdated`] with the old and new horizon values.
     /// Returns the currently configured maximum maturity horizon (seconds from ledger time).
     /// Falls back to [`DEFAULT_MATURITY_MAX_HORIZON_SECS`] if not overridden.
     pub fn get_maturity_max_horizon(env: Env) -> u64 {
@@ -6715,14 +6740,24 @@ impl LiquifactEscrow {
         }
     }
 
+    /// Admin-only horizon update while open. Requires a changed value within the
+    /// inclusive one-day to ten-year range that still includes the stored maturity.
+    /// Does not change maturity or investor commitment locks. Emits [`MaturityMaxHorizonUpdated`].
     pub fn update_maturity_max_horizon(env: Env, new_horizon: u64) -> u64 {
         let escrow = Self::load_escrow_require_admin(&env);
+        validate_maturity_horizon_update(&env, &escrow, new_horizon);
 
         let old_horizon = env
             .storage()
             .instance()
             .get::<DataKey, u64>(&DataKey::MaturityMaxHorizon)
             .unwrap_or(DEFAULT_MATURITY_MAX_HORIZON_SECS);
+
+        ensure(
+            &env,
+            new_horizon != old_horizon,
+            EscrowError::MaturityHorizonUnchanged,
+        );
 
         env.storage()
             .instance()
@@ -6741,10 +6776,8 @@ impl LiquifactEscrow {
 
     /// Monotonically **raise** the maturity-max-horizon ceiling — a forward-only governance lever.
     ///
-    /// Unlike the general [`LiquifactEscrow::update_maturity_max_horizon`] setter (which accepts any
-    /// value), this entrypoint guarantees the horizon can only ever be raised, never lowered or held
-    /// equal. This supports a "term-extension only" policy and avoids the confusing invalid
-    /// configuration that arises when a horizon is lowered below an already-set maturity.
+    /// Shares the open-state, range and maturity-consistency guards of
+    /// [`LiquifactEscrow::update_maturity_max_horizon`], but additionally rejects equal or lower values.
     ///
     /// # Authorization
     /// Requires the signature of the current [`InvoiceEscrow::admin`].
@@ -6760,6 +6793,7 @@ impl LiquifactEscrow {
     /// The newly stored horizon.
     pub fn raise_maturity_max_horizon(env: Env, new_horizon: u64) -> u64 {
         let escrow = Self::load_escrow_require_admin(&env);
+        validate_maturity_horizon_update(&env, &escrow, new_horizon);
 
         let old_horizon = env
             .storage()
