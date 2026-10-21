@@ -49,7 +49,7 @@ wrapper as `refund`; callers cannot choose a different recipient. The single
 Batches contain 1 to 50 distinct addresses and return `(refunded_count,
 total_refunded)`. Zero-contribution and already-refunded entries are skipped.
 Duplicate addresses, including ineligible ones, fail with
-`RefundBatchDuplicateInvestor` (250) before any transfers. Empty and oversized
+`RefundBatchDuplicateInvestor` (254) before any transfers. Empty and oversized
 batches retain errors 144 and 145. Other refund/token failures revert the whole
 batch. Existing cancellation requirements and liability accounting remain in force.
 
