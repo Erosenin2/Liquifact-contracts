@@ -191,13 +191,13 @@ Appends a digest to a bounded audit log. Intended for incremental compliance upd
 cycles, updated KYB documents, AML screening refreshes, or legal hold evidence bundles.
 
 Both append paths reject an existing or primary digest with `AttestationDigestDuplicate`
-(255). Revoked digests remain present: revocation must not allow replaying the same evidence
+(260). Revoked digests remain present: revocation must not allow replaying the same evidence
 as a fresh, unrevoked entry or consuming another slot.
 
 The admin can assign an optional append-only attestor with `set_attestor(Some(address))`,
 rotate it, or disable it with `set_attestor(None)`. The designated address must authorize
 `append_attestation_digest_as(address, digest)`; a different or unset role fails with
-`NotAttestor` (254). Binding, revocation, and unrevocation remain admin-only.
+`NotAttestor` (259). Binding, revocation, and unrevocation remain admin-only.
 
 Each append records its author in persistent storage. `get_attestation_author(index)`
 returns that address, or `None` for legacy entries and out-of-range indices. The new
