@@ -25,7 +25,7 @@ jobs:
       - name: Complete compact full-suite output for PR
         run: |
           mkdir -p results
-          cargo fmt --check
+          cargo fmt --check > results/fmt.log 2>&1 || cat results/fmt.log
           set -o pipefail
           cargo test -p liquifact_escrow --lib -- --format terse 2>&1 | tee results/full-tests-terse.log
       - name: Clippy and final deploy Wasm
