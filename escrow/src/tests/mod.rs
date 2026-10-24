@@ -66,6 +66,7 @@ mod auth_matrix;
 mod cap_validation;
 #[rustfmt::skip]
 mod coverage;
+mod envelope_bounds;
 mod external_calls;
 mod external_calls_mocked;
 mod funding;
@@ -77,15 +78,18 @@ mod init;
 mod funding_deadline_cap_tests;
 mod integration_status_guards;
 mod legal_hold;
+mod maturity_horizon;
 mod migration_errors;
 mod paginated_views;
 mod pause;
 mod pauser_boundary_tests;
 mod properties;
 mod reconciliation_lifecycle;
+mod refund_batch;
 mod settlement;
 mod settlement_config_view;
 mod timelocked_upgrade;
+mod unfund_investor_index;
 mod withdraw_attestation_gate;
 mod yield_tier_boundaries;
 /// Registers a new escrow contract instance and returns its contract id.
@@ -155,10 +159,10 @@ pub fn default_init(client: &LiquifactEscrowClient<'_>, env: &Env, admin: &Addre
         &None,
         &None,
         &None,
+        &None,
         &None, // No funding deadline
         &None,
         &None,
-        &None::<i64>,
     );
 }
 
@@ -198,7 +202,7 @@ pub fn init_and_fund_with_real_token<'a>(
         &None,
         &None,
         &None,
-        &None::<i64>,
+        &None,
     );
 
     let investor = Address::generate(env);

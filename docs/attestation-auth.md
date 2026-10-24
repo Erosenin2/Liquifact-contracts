@@ -23,13 +23,13 @@ rejection** -- for auditors, integrators, and reviewers. Verified directly again
 | **Anyone** | All read-only attestation views are callable without authorization. |
 
 The admin assigns, rotates, or clears the optional role with `set_attestor(Option<Address>)`.
-The attestor path checks the supplied address against the stored role (`NotAttestor`, 259)
+The attestor path checks the supplied address against the stored role (`NotAttestor`, 269)
 and then requires that address's authorization. Clearing the role leaves the admin path
 available and preserves historical authors. A role holder that is also the admin retains
 its separate admin powers.
 
 Both append paths reject the primary digest and any digest already in the log
-(`AttestationDigestDuplicate`, 260), including revoked entries. Revocation changes validity,
+(`AttestationDigestDuplicate`, 270), including revoked entries. Revocation changes validity,
 not history: accepting the same digest again would bypass revocation and waste bounded capacity.
 
 Each successful append stores the author under persistent `AttestationAuthor(index)` and
@@ -136,7 +136,7 @@ follow two distinct patterns depending on whether batch-bound checks precede aut
 
 ```
 1. Load escrow + admin auth    -> load_escrow_require_admin
-2. Duplicate check             -> AttestationDigestDuplicate (260), including primary/revoked digests
+2. Duplicate check             -> AttestationDigestDuplicate (270), including primary/revoked digests
 3. Capacity check              -> AttestationAppendLogCapacityReached (51) if log.len() >= 32
 4. Storage writes              -> append digest and persist author
 5. Events                      -> AttestationAuthored, then unchanged AttestationDigestAppended
